@@ -222,12 +222,43 @@ def ai_post(prompt, generation_config, timeout, operation):
         )
 
     if gemini_key:
-        response = gemini_post(
-            prompt, generation_config, timeout, operation
-        )
-        response.headers["X-AI-Provider"] = "Google Gemini"
-        response.headers["X-AI-Model"] = GEMINI_MODEL
-        return response
+        try:
+            response = gemini_post(
+                prompt, generation_config, timeout, operation
+            )
+            response.headers["X-AI-Provider"] = "Google Gemini"
+            response.headers["X-AI-Model"] = GEMINI_MODEL
+
+            if not response.ok:
+                detail = ""
+                try:
+                    provider_body = response.json()
+                    detail = str(
+                        provider_body.get("error", {}).get("message", "")
+                    ).strip()
+                except (ValueError, AttributeError, TypeError):
+                    detail = ""
+
+                app.logger.warning(
+                    "%s: Gemini fallback returned HTTP %s; %s",
+                    operation,
+                    response.status_code,
+                    detail[:500] or "No provider error message returned"
+                )
+            else:
+                app.logger.info(
+                    "%s completed with Gemini model %s",
+                    operation, GEMINI_MODEL
+                )
+
+            return response
+
+        except requests.RequestException as exc:
+            app.logger.error(
+                "%s: Gemini fallback network failure (%s)",
+                operation, type(exc).__name__
+            )
+            raise
 
     unavailable = requests.Response()
     unavailable.status_code = 503
