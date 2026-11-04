@@ -296,8 +296,25 @@ def paypal_access_token():
         timeout=20,
     )
     if not response.ok:
+        try:
+            body = response.json()
+        except (ValueError, AttributeError):
+            body = {}
+
+        app.logger.error(
+            "PayPal OAuth failed: HTTP %s; debug_id=%s; error=%s; description=%s",
+            response.status_code,
+            response.headers.get("PayPal-Debug-Id"),
+            body.get("error", "unknown"),
+            str(body.get("error_description", "No provider description"))[:500],
+        )
         raise RuntimeError("PayPal authentication failed.")
-    return response.json()["access_token"]
+
+    try:
+        return response.json()["access_token"]
+    except (ValueError, KeyError):
+        app.logger.error("PayPal OAuth response did not contain an access token.")
+        raise RuntimeError("PayPal returned an invalid authentication response.")
 
 
 def paypal_request(method, path, payload=None, request_id=None):
@@ -732,7 +749,17 @@ def create_paypal_order():
                  product["currency"], "CREATED", None, now())
             )
         return jsonify({"id": paypal_id})
-    except (requests.RequestException, RuntimeError, KeyError):
+    except requests.RequestException as exc:
+        app.logger.error(
+            "PayPal create-order network failure: %s",
+            type(exc).__name__,
+        )
+        return error("Could not connect to PayPal Sandbox. Please try again.", 502)
+    except (RuntimeError, KeyError) as exc:
+        app.logger.error(
+            "PayPal create-order failed: %s",
+            str(exc)[:300],
+        )
         return error("Could not create a PayPal order. Check Sandbox configuration.", 502)
 
 
