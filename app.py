@@ -1,6 +1,7 @@
 import os
 import time
 import re
+import json
 import hmac
 import hashlib
 import sqlite3
@@ -22,7 +23,8 @@ DB_PATH = Path(os.getenv("DATABASE_PATH", "data/creatorpay.db"))
 if not DB_PATH.is_absolute():
     DB_PATH = BASE / DB_PATH
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 PAYPAL_MODE = os.getenv("PAYPAL_MODE", "sandbox").lower()
 PAYPAL_BASE = (
     "https://api-m.sandbox.paypal.com"
@@ -104,6 +106,7 @@ def error(message, status=400):
     return jsonify({"error": message}), status
 
 
+
 def gemini_post(prompt, generation_config, timeout, operation):
     """Call Gemini with bounded retries for temporary provider failures."""
     url = (
@@ -141,7 +144,6 @@ def gemini_post(prompt, generation_config, timeout, operation):
             "Gemini %s attempt %s/4 returned HTTP %s",
             operation, attempt + 1, response.status_code
         )
-
         if attempt == 3:
             return response
 
@@ -150,10 +152,96 @@ def gemini_post(prompt, generation_config, timeout, operation):
             delay = min(max(float(retry_after), 1), 20)
         except (TypeError, ValueError):
             delay = min(2 ** (attempt + 1), 12)
-
         time.sleep(delay)
 
     return response
+
+
+def ai_post(prompt, generation_config, timeout, operation):
+    """Try Groq first, then automatically fall back to Gemini."""
+    groq_key = os.getenv("GROQ_API_KEY", "").strip()
+    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+    groq_failure = "Groq is not configured."
+
+    if groq_key:
+        try:
+            response = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {groq_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": GROQ_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": generation_config.get("temperature", 0.65),
+                    "max_tokens": generation_config.get(
+                        "maxOutputTokens", 2500
+                    ),
+                },
+                timeout=timeout,
+            )
+
+            if response.ok:
+                body = response.json()
+                content = (
+                    body.get("choices", [{}])[0]
+                    .get("message", {})
+                    .get("content", "")
+                )
+                if isinstance(content, str) and content.strip():
+                    normalized = requests.Response()
+                    normalized.status_code = 200
+                    normalized.url = response.url
+                    normalized.headers["Content-Type"] = "application/json"
+                    normalized.headers["X-AI-Provider"] = "Groq"
+                    normalized.headers["X-AI-Model"] = GROQ_MODEL
+                    normalized._content = json.dumps({
+                        "candidates": [{
+                            "content": {
+                                "parts": [{"text": content.strip()}]
+                            }
+                        }]
+                    }).encode("utf-8")
+                    app.logger.info(
+                        "%s completed with Groq model %s",
+                        operation, GROQ_MODEL
+                    )
+                    return normalized
+
+                groq_failure = "Groq returned an empty response."
+            else:
+                groq_failure = f"Groq returned HTTP {response.status_code}."
+
+        except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as exc:
+            groq_failure = f"Groq request failed ({type(exc).__name__})."
+
+        app.logger.warning(
+            "%s: %s Trying Gemini fallback.",
+            operation, groq_failure
+        )
+
+    if gemini_key:
+        response = gemini_post(
+            prompt, generation_config, timeout, operation
+        )
+        response.headers["X-AI-Provider"] = "Google Gemini"
+        response.headers["X-AI-Model"] = GEMINI_MODEL
+        return response
+
+    unavailable = requests.Response()
+    unavailable.status_code = 503
+    unavailable._content = json.dumps({
+        "error": {"message": groq_failure + " Gemini fallback is not configured."}
+    }).encode("utf-8")
+    unavailable.headers["X-AI-Provider"] = "Unavailable"
+    unavailable.headers["X-AI-Model"] = "none"
+    return unavailable
+
+
+def ai_model(response):
+    return response.headers.get("X-AI-Model", GEMINI_MODEL)
+
 
 
 def delivery_token(paypal_order_id):
@@ -233,7 +321,12 @@ def health():
     return jsonify({
         "ok": True,
         "app": "CreatorPay AI",
-        "ai_configured": bool(os.getenv("GEMINI_API_KEY")),
+        "ai_configured": bool(os.getenv("GROQ_API_KEY") or os.getenv("GEMINI_API_KEY")),
+        "ai_primary_provider": "Groq",
+        "ai_providers": {
+            "groq": bool(os.getenv("GROQ_API_KEY")),
+            "gemini": bool(os.getenv("GEMINI_API_KEY")),
+        },
         "paypal_configured": bool(
             os.getenv("PAYPAL_CLIENT_ID") and os.getenv("PAYPAL_CLIENT_SECRET")
         ),
@@ -258,9 +351,8 @@ def generate_product():
         return error("Enter a product idea (maximum 1,200 characters).")
     if len(audience) > 500 or len(product_type) > 100:
         return error("Please shorten the product details.")
-    api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key:
-        return error("AI is not connected yet. Add your Gemini API key to .env.", 503)
+    if not (os.getenv("GROQ_API_KEY") or os.getenv("GEMINI_API_KEY")):
+        return error("AI is not connected. Configure Groq or Gemini.", 503)
 
     prompt = f"""
 You are the professional digital-product planner inside CreatorPay AI.
@@ -306,7 +398,7 @@ Rules:
 - Return the requested sections, not commentary.
 """
     try:
-        response = gemini_post(
+        response = ai_post(
             prompt,
             {"temperature": 0.65, "maxOutputTokens": 2500},
             timeout=(20, 90),
@@ -341,12 +433,12 @@ Rules:
         def extract_section(label, following):
             next_heading = "|".join(re.escape(x) for x in following)
             pattern = (
-                r"(?ims)^\\s*(?:#{1,6}\\s*)?(?:\\*\\*)?"
+                r"(?ims)^\s*(?:#{1,6}\s*)?(?:\*\*)?"
                 + re.escape(label)
-                + r"(?:\\*\\*)?\\s*:?\\s*\\n"
-                + r"(.*?)(?=^\\s*(?:#{1,6}\\s*)?(?:\\*\\*)?(?:"
+                + r"(?:\*\*)?\s*:?\s*\n"
+                + r"(.*?)(?=^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:"
                 + next_heading
-                + r")(?:\\*\\*)?\\s*:?\\s*$|\\Z)"
+                + r")(?:\*\*)?\s*:?\s*$|\Z)"
             )
             match = re.search(pattern, text)
             return match.group(1).strip() if match else ""
@@ -362,7 +454,7 @@ Rules:
             "SUGGESTED PRICE (USD)"
         ])
         price_text = extract_section("SUGGESTED PRICE (USD)", [])
-        price_match = re.search(r"\\$\\s*(\\d+(?:\\.\\d{1,2})?)", price_text)
+        price_match = re.search(r"\$\s*(\d+(?:\.\d{1,2})?)", price_text)
 
         return jsonify({
             "draft": text,
@@ -370,7 +462,8 @@ Rules:
             "short_description": (short_description or listing_description)[:1000],
             "suggested_price": price_match.group(1) if price_match else "",
             "page_count": page_count,
-            "model": GEMINI_MODEL
+            "model": ai_model(response),
+            "provider": response.headers.get("X-AI-Provider", "Google Gemini")
         })
     except requests.Timeout:
         app.logger.warning("Gemini product outline timed out after retries.")
@@ -412,9 +505,8 @@ def expand_chapter():
     if len(audience) > 500 or len(product_type) > 100:
         return error("Please shorten the product details.")
 
-    api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key:
-        return error("Gemini API key is not configured.", 503)
+    if not (os.getenv("GROQ_API_KEY") or os.getenv("GEMINI_API_KEY")):
+        return error("AI is not connected. Configure Groq or Gemini.", 503)
 
     prompt = f"""
 You are writing one complete chapter of an original digital product for CreatorPay AI.
@@ -449,7 +541,7 @@ that are not implemented. Mark assumptions clearly.
 Return only the finished chapter in Markdown.
 """
     try:
-        response = gemini_post(
+        response = ai_post(
             prompt,
             {"temperature": 0.65, "maxOutputTokens": 3000},
             timeout=(20, 120),
@@ -502,7 +594,11 @@ Return only the finished chapter in Markdown.
             )
             return error("Gemini returned an empty chapter. Please retry.", 502)
 
-        return jsonify({"chapter": chapter, "model": GEMINI_MODEL})
+        return jsonify({
+            "chapter": chapter,
+            "model": ai_model(response),
+            "provider": response.headers.get("X-AI-Provider", "Google Gemini")
+        })
     except requests.Timeout:
         app.logger.warning("Gemini chapter request timed out.")
         return error("Gemini took too long to write this chapter. Please retry.", 504)
