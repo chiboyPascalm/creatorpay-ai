@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#101126">
+<title>CreatorPay AI — Create. Publish. Get Paid.</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main>
+<header>
+  <div class="brand-mark">C</div>
+  <div><h1>CreatorPay AI</h1><p>Create digital products. Sell with confidence.</p></div>
+</header>
+
+<section class="hero">
+  <span class="eyebrow">THE CREATOR COMMERCE WORKSPACE</span>
+  <h2>Turn your knowledge into a digital product.</h2>
+  <p>Develop your idea with AI, prepare your product, and accept payments through PayPal.</p>
+  <div class="pills"><span>AI product development</span><span>Digital listings</span><span>PayPal checkout</span></div>
+</section>
+
+<section class="panel">
+  <h2>1. Develop your product</h2>
+  <label for="idea">What do you want to create?</label>
+  <textarea id="idea" maxlength="1200" placeholder="Example: A practical beginner's guide to starting a small catering business..."></textarea>
+  <div class="two">
+    <div><label for="audience">Who is it for?</label><input id="audience" maxlength="500" placeholder="e.g. First-time entrepreneurs"></div>
+    <div><label for="type">Product format</label>
+      <select id="type">
+        <option>Digital guide</option><option>E-book</option><option>Workbook</option>
+        <option>Template pack</option><option>Learning resource</option><option>Checklist</option>
+      </select>
+    </div>
+  </div>
+  <button id="generate" class="primary">Generate product draft</button>
+  <button id="resume-generation" type="button" hidden>Resume generation</button>
+  <p id="ai-status" class="status" role="status">AI connection status is being checked…</p>
+  <label for="draft">Generation status</label>
+  <textarea id="draft" class="draft" readonly aria-live="polite"
+    placeholder="Your completed content will be ready here when generation finishes."
+    maxlength="50000"></textarea>
+  <p id="generation-hint" class="hint">When generation finishes, select Save product to add your content to the marketplace. Check accuracy and ownership rights before publishing.</p>
+</section>
+
+<section class="panel">
+  <h2>2. Prepare your product listing</h2>
+  <label for="title">Product title</label><input id="title" maxlength="120" placeholder="Your product title">
+  <label for="description">Short listing description</label><textarea id="description" maxlength="1000" placeholder="Explain what buyers will receive."></textarea>
+  <div class="two">
+    <div><label for="price">Price (USD)</label><input id="price" type="number" min="1" max="10000" step="0.01" placeholder="9.99"></div>
+    <div><label>Payment currency</label><input value="USD" disabled></div>
+  </div>
+  <button id="save" class="primary">Save product</button>
+  <p id="save-status" class="status" role="status"></p>
+</section>
+
+<section class="panel">
+  <h2>3. Product marketplace</h2>
+  <p class="hint">Saved products appear here. Payments are processed in PayPal Sandbox while testing.</p>
+  <div id="products"><p class="hint">Loading products…</p></div>
+</section>
+
+<section class="panel" id="my-purchases">
+  <h2>4. My Purchases</h2>
+  <p class="hint">Your purchases on this device. Each product is verified with the payment server before it is displayed.</p>
+  <div id="purchases" aria-live="polite">
+    <p class="hint">Loading your purchases…</p>
+  </div>
+</section>
+
+<footer>Created by Chiboy Godwin Pascal | <a href="https://github.com/chiboyPascalm" target="_blank" rel="noopener noreferrer">GitHub</a> | <a href="https://wa.me/2349135516263" target="_blank" rel="noopener noreferrer">WhatsApp</a> · Sandbox payments are not real transactions.</footer>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

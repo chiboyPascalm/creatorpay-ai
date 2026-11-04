@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.py[cod]
+data/
+*.db
+*.sqlite*
+*.log
+.DS_Store
+
+# Local development backups
+backups/
+*.before-*
